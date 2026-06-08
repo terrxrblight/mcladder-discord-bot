@@ -1,0 +1,19 @@
+{
+  "name": "mcladder-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for the mcladder ranked Minecraft server — live leaderboard, /stats, (soon) rank roles.",
+  "private": true,
+  "type": "commonjs",
+  "engines": { "node": ">=18.17" },
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy-commands": "node src/deploy-commands.js",
+    "dry-run": "node scripts/dry-run.js"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.44",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1"
+  }
+}

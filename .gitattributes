@@ -1,0 +1,10 @@
+# Нормализуем переводы строк (в репо — LF), чтобы не было «мусорных» diff между ОС
+* text=auto eol=lf
+
+# Бинарные файлы — НЕ трогать
+*.ttf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary
