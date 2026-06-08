@@ -1,39 +1,37 @@
-// Rich Presence бота (как у игр): в списке — «Playing mcladder.com», а в карточке
-// профиля — лого + жирное «mcladder.com» + строка-сводка (details) + нижняя строка
-// (state), которая РОТИРУЕТСЯ каждые 30с (online → in match → топ-1), плюс таймер.
+// Rich Presence бота (как у игр): в списке — «Playing mcladder.com», а в карточке —
+// лого + жирное «mcladder.com» + строка-сводка (details) + нижняя строка (state),
+// которая РОТИРУЕТСЯ каждые 30с (online → in match → топ-1), плюс таймер «elapsed».
 //
-// Картинка-лого: art-asset, залитый в Developer Portal → [приложение бота] →
-// Rich Presence → Art Assets с ключом ASSET_KEY (нижний регистр). Для резолва ассета
-// в presence обязателен application_id = DISCORD_CLIENT_ID того же приложения.
+// Лого: залитые в Dev Portal art-assets ботам в presence НЕ рисуются (ограничение
+// Discord). Рабочий путь — ВНЕШНЯЯ картинка по URL через медиа-прокси Discord:
+// один раз дёргаем /applications/{id}/external-assets (токен у REST-клиента бота есть),
+// получаем mp:-ссылку и кладём её в assets.large_image.
 //
-// Почему «сырой» gateway-пакет: discord.js.setPresence передаёт только name/type/
-// state/url и РЕЖЕТ assets/details/timestamps. Поэтому presence (op 3) шлём напрямую
-// через client.ws.broadcast — это штатный метод WebSocketManager в discord.js v14.
+// Почему «сырой» gateway-пакет: discord.js.setPresence режет assets/details/timestamps,
+// поэтому presence (op 3) шлём через штатный client.ws.broadcast.
 const { config } = require("./config");
 const db = require("./db");
 const api = require("./api");
 
-const REFRESH_MS = 30_000;          // период обновления/ротации
-const APP_NAME = "mcladder.com";    // имя «игры» (жирным в карточке, «Playing mcladder.com»)
-const TAGLINE = "Ranked Minecraft PvP"; // верхняя строка карточки (details)
-const ASSET_KEY = "mcladder";       // ключ art-asset в Dev Portal (нижний регистр!)
-const LARGE_TEXT = "mcladder.com";  // подпись при наведении на лого
+const REFRESH_MS = 30_000;
+const APP_NAME = "mcladder.com";          // «игра» (жирным; «Playing mcladder.com»)
+const TAGLINE = "Ranked Minecraft PvP";   // верхняя строка карточки (details)
+const LOGO_URL = "https://mcladder.com/discord-avatar.png"; // та же картинка, что аватарка
+const LARGE_TEXT = "mcladder.com";        // подпись при наведении на лого
 
 class StatusUpdater {
   constructor(client) {
     this.client = client;
     this.timer = null;
-    this.frame = 0;              // индекс ротации нижней строки
-    this.startedAt = Date.now(); // для «elapsed» в карточке
+    this.frame = 0;
+    this.startedAt = Date.now();
+    this.largeImage = undefined; // undefined = ещё не резолвили; string|null = результат
     this.warned = false;
   }
 
   async start() {
-    // Однострочный «отпечаток» на старте — чтобы по логам сразу видеть, какая версия
-    // крутится и всё ли на месте для лого (app_id + наличие метода broadcast).
     console.log(
-      `[status] rich presence: Playing ${APP_NAME} · asset=${ASSET_KEY} · ` +
-        `app_id=${config.clientId ? "set" : "MISSING"} · ` +
+      `[status] rich presence: Playing ${APP_NAME} · app_id=${config.clientId ? "set" : "MISSING"} · ` +
         `broadcast=${typeof this.client.ws?.broadcast === "function" ? "ok" : "MISSING"}`
     );
     await this.tick().catch((e) => console.error("[status] start:", e?.message || e));
@@ -50,13 +48,32 @@ class StatusUpdater {
 
   async tick() {
     const { rotation, isOnline } = await this.collect();
+    const largeImage = await this.resolveLargeImage();
     const state = rotation[this.frame % rotation.length];
     this.frame = (this.frame + 1) % 1_000_000;
-    this.apply(state, isOnline);
+    this.apply(state, isOnline, largeImage);
   }
 
-  // Готовит строки ротации нижней строки карточки из живого онлайна/матчей (БД),
-  // топ-1 и всего игроков (API). Всегда есть хотя бы один элемент.
+  // Превращает URL логотипа в mp:-ссылку через external-assets. Резолвим один раз и кэшируем.
+  async resolveLargeImage() {
+    if (this.largeImage !== undefined) return this.largeImage;
+    this.largeImage = null; // помечаем «попытка была», чтобы не дёргать API на каждом тике
+    try {
+      if (!config.clientId) return null;
+      const res = await this.client.rest.post(
+        `/applications/${config.clientId}/external-assets`,
+        { body: { urls: [LOGO_URL] } }
+      );
+      const path = Array.isArray(res) && res[0] && res[0].external_asset_path;
+      this.largeImage = path ? `mp:${path}` : null;
+      console.log("[status] logo:", this.largeImage || "external-assets вернул пусто");
+    } catch (e) {
+      console.error("[status] external-assets failed:", e?.message || e);
+    }
+    return this.largeImage;
+  }
+
+  // Строки ротации нижней строки карточки: живой онлайн/матчи (БД), топ-1 и всего игроков (API).
   async collect() {
     let online = null;
     let inMatch = 0;
@@ -84,7 +101,7 @@ class StatusUpdater {
     return { rotation, isOnline: (online ?? 0) > 0 };
   }
 
-  apply(state, isOnline) {
+  apply(state, isOnline, largeImage) {
     const ws = this.client.ws;
     if (!ws || typeof ws.broadcast !== "function") {
       if (!this.warned) {
@@ -93,6 +110,9 @@ class StatusUpdater {
       }
       return;
     }
+
+    const assets = { large_text: LARGE_TEXT };
+    if (largeImage) assets.large_image = largeImage;
 
     const payload = {
       op: 3, // Presence Update
@@ -107,7 +127,7 @@ class StatusUpdater {
             application_id: config.clientId || undefined,
             details: TAGLINE,
             state,
-            assets: { large_image: ASSET_KEY, large_text: LARGE_TEXT },
+            assets,
             timestamps: { start: this.startedAt },
           },
         ],
