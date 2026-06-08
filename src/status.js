@@ -2,9 +2,10 @@
 // лого + жирное «mcladder.com» + строка-сводка (details) + нижняя строка (state),
 // которая РОТИРУЕТСЯ каждые 30с (online → in match → топ-1), плюс таймер «elapsed».
 //
-// Лого: ассет из Dev Portal → Rich Presence → Art Assets. В gateway-presence бота
-// ссылаемся на него ЧИСЛОВЫМ ID (не именем): ASSET_ID — это число из CDN-URL ассета
-// (https://cdn.discordapp.com/app-assets/<app_id>/<ASSET_ID>.png).
+// ВАЖНО про лого: кастомную картинку (large_image) в presence бот показать НЕ может —
+// это ограничение Discord, проверено всеми путями (art-asset по имени и по ID не
+// рендерятся; внешний URL → «Bots cannot use this endpoint»). Логотип mcladder и так
+// виден как АВАТАРКА бота сверху в карточке.
 //
 // discord.js.setPresence режет assets/details/timestamps, поэтому presence (op 3)
 // шлём через штатный client.ws.broadcast.
@@ -15,8 +16,6 @@ const api = require("./api");
 const REFRESH_MS = 30_000;
 const APP_NAME = "mcladder.com";          // «игра» (жирным; «Playing mcladder.com»)
 const TAGLINE = "Ranked Minecraft PvP";   // верхняя строка карточки (details)
-const ASSET_ID = "1513387079176814683";   // числовой ID art-asset'а (из CDN-URL)
-const LARGE_TEXT = "mcladder.com";        // подпись при наведении на лого
 
 class StatusUpdater {
   constructor(client) {
@@ -30,7 +29,7 @@ class StatusUpdater {
   async start() {
     console.log(
       `[status] rich presence: Playing ${APP_NAME} · app_id=${config.clientId ? "set" : "MISSING"} · ` +
-        `asset_id=${ASSET_ID} · broadcast=${typeof this.client.ws?.broadcast === "function" ? "ok" : "MISSING"}`
+        `broadcast=${typeof this.client.ws?.broadcast === "function" ? "ok" : "MISSING"}`
     );
     await this.tick().catch((e) => console.error("[status] start:", e?.message || e));
     this.timer = setInterval(
@@ -102,7 +101,6 @@ class StatusUpdater {
             application_id: config.clientId || undefined,
             details: TAGLINE,
             state,
-            assets: { large_image: ASSET_ID, large_text: LARGE_TEXT },
             timestamps: { start: this.startedAt },
           },
         ],
