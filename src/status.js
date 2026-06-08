@@ -29,9 +29,13 @@ class StatusUpdater {
   }
 
   async start() {
-    if (!config.clientId) {
-      console.warn("[status] DISCORD_CLIENT_ID не задан — лого-ассет не подхватится");
-    }
+    // Однострочный «отпечаток» на старте — чтобы по логам сразу видеть, какая версия
+    // крутится и всё ли на месте для лого (app_id + наличие метода broadcast).
+    console.log(
+      `[status] rich presence: Playing ${APP_NAME} · asset=${ASSET_KEY} · ` +
+        `app_id=${config.clientId ? "set" : "MISSING"} · ` +
+        `broadcast=${typeof this.client.ws?.broadcast === "function" ? "ok" : "MISSING"}`
+    );
     await this.tick().catch((e) => console.error("[status] start:", e?.message || e));
     this.timer = setInterval(
       () => this.tick().catch((e) => console.error("[status] tick:", e?.message || e)),
