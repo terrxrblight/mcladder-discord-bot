@@ -2,13 +2,12 @@
 // лого + жирное «mcladder.com» + строка-сводка (details) + нижняя строка (state),
 // которая РОТИРУЕТСЯ каждые 30с (online → in match → топ-1), плюс таймер «elapsed».
 //
-// Лого: залитые в Dev Portal art-assets ботам в presence НЕ рисуются (ограничение
-// Discord). Рабочий путь — ВНЕШНЯЯ картинка по URL через медиа-прокси Discord:
-// один раз дёргаем /applications/{id}/external-assets (токен у REST-клиента бота есть),
-// получаем mp:-ссылку и кладём её в assets.large_image.
+// Лого: ассет из Dev Portal → Rich Presence → Art Assets. В gateway-presence бота
+// ссылаемся на него ЧИСЛОВЫМ ID (не именем): ASSET_ID — это число из CDN-URL ассета
+// (https://cdn.discordapp.com/app-assets/<app_id>/<ASSET_ID>.png).
 //
-// Почему «сырой» gateway-пакет: discord.js.setPresence режет assets/details/timestamps,
-// поэтому presence (op 3) шлём через штатный client.ws.broadcast.
+// discord.js.setPresence режет assets/details/timestamps, поэтому presence (op 3)
+// шлём через штатный client.ws.broadcast.
 const { config } = require("./config");
 const db = require("./db");
 const api = require("./api");
@@ -16,7 +15,7 @@ const api = require("./api");
 const REFRESH_MS = 30_000;
 const APP_NAME = "mcladder.com";          // «игра» (жирным; «Playing mcladder.com»)
 const TAGLINE = "Ranked Minecraft PvP";   // верхняя строка карточки (details)
-const LOGO_URL = "https://mcladder.com/discord-avatar.png"; // та же картинка, что аватарка
+const ASSET_ID = "1513387079176814683";   // числовой ID art-asset'а (из CDN-URL)
 const LARGE_TEXT = "mcladder.com";        // подпись при наведении на лого
 
 class StatusUpdater {
@@ -25,14 +24,13 @@ class StatusUpdater {
     this.timer = null;
     this.frame = 0;
     this.startedAt = Date.now();
-    this.largeImage = undefined; // undefined = ещё не резолвили; string|null = результат
     this.warned = false;
   }
 
   async start() {
     console.log(
       `[status] rich presence: Playing ${APP_NAME} · app_id=${config.clientId ? "set" : "MISSING"} · ` +
-        `broadcast=${typeof this.client.ws?.broadcast === "function" ? "ok" : "MISSING"}`
+        `asset_id=${ASSET_ID} · broadcast=${typeof this.client.ws?.broadcast === "function" ? "ok" : "MISSING"}`
     );
     await this.tick().catch((e) => console.error("[status] start:", e?.message || e));
     this.timer = setInterval(
@@ -48,29 +46,9 @@ class StatusUpdater {
 
   async tick() {
     const { rotation, isOnline } = await this.collect();
-    const largeImage = await this.resolveLargeImage();
     const state = rotation[this.frame % rotation.length];
     this.frame = (this.frame + 1) % 1_000_000;
-    this.apply(state, isOnline, largeImage);
-  }
-
-  // Превращает URL логотипа в mp:-ссылку через external-assets. Резолвим один раз и кэшируем.
-  async resolveLargeImage() {
-    if (this.largeImage !== undefined) return this.largeImage;
-    this.largeImage = null; // помечаем «попытка была», чтобы не дёргать API на каждом тике
-    try {
-      if (!config.clientId) return null;
-      const res = await this.client.rest.post(
-        `/applications/${config.clientId}/external-assets`,
-        { body: { urls: [LOGO_URL] } }
-      );
-      const path = Array.isArray(res) && res[0] && res[0].external_asset_path;
-      this.largeImage = path ? `mp:${path}` : null;
-      console.log("[status] logo:", this.largeImage || "external-assets вернул пусто");
-    } catch (e) {
-      console.error("[status] external-assets failed:", e?.message || e);
-    }
-    return this.largeImage;
+    this.apply(state, isOnline);
   }
 
   // Строки ротации нижней строки карточки: живой онлайн/матчи (БД), топ-1 и всего игроков (API).
@@ -101,7 +79,7 @@ class StatusUpdater {
     return { rotation, isOnline: (online ?? 0) > 0 };
   }
 
-  apply(state, isOnline, largeImage) {
+  apply(state, isOnline) {
     const ws = this.client.ws;
     if (!ws || typeof ws.broadcast !== "function") {
       if (!this.warned) {
@@ -110,9 +88,6 @@ class StatusUpdater {
       }
       return;
     }
-
-    const assets = { large_text: LARGE_TEXT };
-    if (largeImage) assets.large_image = largeImage;
 
     const payload = {
       op: 3, // Presence Update
@@ -127,7 +102,7 @@ class StatusUpdater {
             application_id: config.clientId || undefined,
             details: TAGLINE,
             state,
-            assets,
+            assets: { large_image: ASSET_ID, large_text: LARGE_TEXT },
             timestamps: { start: this.startedAt },
           },
         ],
