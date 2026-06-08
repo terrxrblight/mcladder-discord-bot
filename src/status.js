@@ -1,35 +1,35 @@
-// Rich Presence бота: в списке участников — «Playing mcladder», а в карточке
-// профиля (поповер) — лого + details/state + время работы, как у игровой активности.
+// Статус бота: ротация коротких строк с эмодзи-иконкой (online / in match / топ-1 /
+// домен), плюс цвет точки: зелёная когда есть онлайн, idle когда пусто.
+// Онлайн берём из player_presence (через БД); без БД — фолбэк на /api/stats.
 //
-// Картинка-лого: art-asset, ЗАЛИТЫЙ в Developer Portal → [приложение бота] →
-// Rich Presence → Art Assets с ключом ASSET_KEY (см. ниже). Ключи Discord приводит
-// к нижнему регистру. Без залитого ассета карточка покажется без картинки.
+// Шлём через штатный client.user.setPresence (надёжно обновляется). Тип Custom
+// (type 4) даёт «чистый» вид: эмодзи как иконка, без префикса Playing/Watching.
+// Если у твоего бота Custom-статус не отображается — поменяй ACTIVITY_TYPE ниже на
+// ActivityType.Watching (или Playing/Competing): ротация та же, добавится префикс.
 //
-// Почему «сырой» gateway-пакет: discord.js.setPresence НЕ передаёт assets/details/
-// timestamps для бота — режет их. Поэтому шлём presence (op 3) напрямую через шард.
-// Если внутренний API шарда отличается на твоей версии — срабатывает фолбэк через
-// setPresence (без картинки, но «Playing mcladder» + текст останутся).
+// Большого лого в карточке тут НЕТ: rich-presence с картинкой (type 0) исключает
+// ротацию (строка жёстко «Playing <name>») и требует сырого gateway-пакета, который
+// оказался ненадёжным. Если захочешь лого вместо ротации — это отдельный вариант.
 const { ActivityType } = require("discord.js");
-const { config } = require("./config");
 const db = require("./db");
 const api = require("./api");
 
-const REFRESH_MS = 30_000;          // как часто обновлять данные в presence
-const APP_NAME = "mcladder";        // имя активности → «Playing mcladder»
-const ASSET_KEY = "mcladder";       // ключ art-asset в Dev Portal (нижний регистр!)
-const LARGE_TEXT = "mcladder.com";  // подпись при наведении на лого
+const ROTATE_MS = 30_000;                  // период смены строки (безопасно по rate-limit)
+const ACTIVITY_TYPE = ActivityType.Custom; // ← переключатель вида статуса (см. шапку)
 
 class StatusUpdater {
   constructor(client) {
     this.client = client;
     this.timer = null;
-    this.startedAt = Date.now(); // для «elapsed» в карточке
-    this.warned = false;
+    this.frame = 0; // индекс текущей строки ротации
   }
 
   async start() {
-    await this.tick().catch(() => {});
-    this.timer = setInterval(() => this.tick().catch(() => {}), REFRESH_MS);
+    await this.tick().catch((e) => console.error("[status] start:", e?.message || e));
+    this.timer = setInterval(
+      () => this.tick().catch((e) => console.error("[status] tick:", e?.message || e)),
+      ROTATE_MS
+    );
   }
 
   stop() {
@@ -38,11 +38,15 @@ class StatusUpdater {
   }
 
   async tick() {
-    const { details, state, isOnline } = await this.collect();
-    this.apply(details, state, isOnline);
+    const { lines, online } = await this.collect();
+    const list = lines.length ? lines : ["🌐 mcladder.com"];
+    const line = list[this.frame % list.length];
+    this.frame = (this.frame + 1) % 1_000_000;
+    this.apply(line, online > 0);
   }
 
-  // Готовит две строки карточки: details (онлайн/в матче) и state (топ-1).
+  // Собирает доступные строки ротации: живой онлайн/в матче (БД), топ-1 и всего
+  // игроков (API). Включаем только те строки, по которым есть данные.
   async collect() {
     let online = null;
     let inMatch = 0;
@@ -60,80 +64,26 @@ class StatusUpdater {
     ]);
     const top = Array.isArray(rows) && rows[0] ? rows[0] : null;
 
-    let details;
+    const lines = [];
     if (online != null) {
-      details = `${online > 0 ? "🟢" : "💤"} ${online} online` +
-        (inMatch > 0 ? ` · ⚔️ ${inMatch} in match` : "");
+      lines.push(`${online > 0 ? "🟢" : "💤"} ${online} online`);
     } else if (stats && typeof stats.totalPlayers === "number") {
-      details = `👥 ${stats.totalPlayers} players`;
-    } else {
-      details = "Ranked Minecraft PvP";
+      lines.push(`👥 ${stats.totalPlayers} players`);
     }
+    if (inMatch > 0) lines.push(`⚔️ ${inMatch} in match`);
+    if (top && top.name) lines.push(`🏆 #1 ${top.name} · ${top.elo} ELO`);
+    lines.push("🌐 mcladder.com");
 
-    const state = top && top.name ? `🏆 #1 ${top.name} · ${top.elo} ELO` : "mcladder.com";
-
-    return { details, state, isOnline: (online ?? 0) > 0 };
+    return { lines, online: online ?? 0 };
   }
 
-  apply(details, state, isOnline) {
+  apply(line, isOnline) {
     if (!this.client.user) return;
-    const status = isOnline ? "online" : "idle";
-
-    // Основной путь: сырой presence с лого/details/timestamps.
-    if (this.sendRawPresence(details, state, status)) return;
-
-    // Фолбэк: хотя бы «Playing mcladder» + текст (без картинки/details — их
-    // discord.js не передаёт; самое важное кладём в state).
-    this.client.user
-      .setPresence({
-        status,
-        activities: [{ name: APP_NAME, type: ActivityType.Playing, state: `${details} · ${state}` }],
-      })
-      .catch(() => {});
-  }
-
-  // Шлёт presence (gateway op 3) напрямую через шард(ы). true — отправлено.
-  sendRawPresence(details, state, status) {
-    try {
-      const shards = this.client.ws && this.client.ws.shards;
-      if (!shards || shards.size === 0) return false;
-
-      const d = {
-        since: null,
-        afk: false,
-        status,
-        activities: [
-          {
-            name: APP_NAME,
-            type: 0, // Playing
-            application_id: config.clientId || undefined,
-            details: details || undefined,
-            state: state || undefined,
-            assets: { large_image: ASSET_KEY, large_text: LARGE_TEXT },
-            timestamps: { start: this.startedAt },
-          },
-        ],
-      };
-
-      let sent = false;
-      for (const shard of shards.values()) {
-        if (typeof shard.send === "function") {
-          shard.send({ op: 3, d });
-          sent = true;
-        }
-      }
-      if (!sent && !this.warned) {
-        console.error("[status] shard.send unavailable on this discord.js build — using setPresence fallback (no rich-presence image)");
-        this.warned = true;
-      }
-      return sent;
-    } catch (e) {
-      if (!this.warned) {
-        console.error("[status] raw presence failed, falling back to setPresence:", e.message || e);
-        this.warned = true;
-      }
-      return false;
-    }
+    this.client.user.setPresence({
+      status: isOnline ? "online" : "idle",
+      // name и state дублируем: разные типы активности читают разное поле.
+      activities: [{ name: line, type: ACTIVITY_TYPE, state: line }],
+    });
   }
 }
 
