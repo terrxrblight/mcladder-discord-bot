@@ -26,22 +26,24 @@ class RoleSync {
   }
 
   async start() {
-    if (!config.roleSync) {
-      console.log("[roles] ROLE_SYNC=false — авто-роли не запущены");
+    if (!config.roleSync && !config.boosterSync) {
+      console.log("[roles] ROLE_SYNC=false и BOOSTER_SYNC=false — синк не запущен");
       return;
     }
     if (!db.enabled) {
-      console.warn("[roles] ROLE_SYNC включён, но БД не настроена (DB_* в .env) — пропускаю");
+      console.warn("[roles] синк включён, но БД не настроена (DB_* в .env) — пропускаю");
       return;
     }
     this.guild = await this.client.guilds.fetch(config.guildId);
-    await this.ensureRoles();
+    if (config.roleSync) await this.ensureRoles();
     await this.sync().catch((e) => console.error("[roles]", e.message || e));
     this.timer = setInterval(
       () => this.sync().catch((e) => console.error("[roles]", e.message || e)),
       config.roleSyncMinutes * 60 * 1000
     );
-    console.log(`✅ Role sync started (every ${config.roleSyncMinutes} min)`);
+    console.log(
+      `✅ Sync started (every ${config.roleSyncMinutes} min; roles=${config.roleSync}, booster=${config.boosterSync})`
+    );
   }
 
   stop() {
@@ -92,6 +94,23 @@ class RoleSync {
   async sync() {
     if (!this.guild) return;
 
+    const members = await this.guild.members.fetch(); // нужен GuildMembers intent
+
+    // Booster-синк: snapshot тех, кто СЕЙЧАС бустит сервер (premiumSince) → на сайт.
+    // Сайт сам резолвит discord-uid → mc_uuid и выставляет/снимает флаг бустера.
+    if (config.boosterSync) {
+      const boosters = [];
+      for (const m of members.values()) {
+        if (m.user.bot) continue;
+        if (m.premiumSinceTimestamp) boosters.push(m.id);
+      }
+      await api
+        .postBoosters(boosters)
+        .catch((e) => console.error("[roles] booster sync failed:", e.message || e));
+    }
+
+    if (!config.roleSync) return; // только booster-синк — роли не трогаем
+
     const links = await db.allDiscordLinks();
     const mcByDiscord = new Map(links.map((l) => [String(l.discord_id), String(l.mc_uuid)]));
     const players = await db.playersByUuids([...new Set([...mcByDiscord.values()])]);
@@ -113,7 +132,6 @@ class RoleSync {
       }
     }
 
-    const members = await this.guild.members.fetch(); // нужен GuildMembers intent
     for (const member of members.values()) {
       if (member.user.bot) continue;
       const mcUuid = mcByDiscord.get(member.id);

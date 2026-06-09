@@ -46,6 +46,33 @@ const getCurrentSeason = async () => {
   return r ? r.season : null;
 };
 
+// POST /integrations/discord/boosters — server-to-server (защищён BOT_SYNC_SECRET).
+// Шлём ПОЛНЫЙ snapshot бустящих сейчас discord-uid; сайт сам резолвит в mc_uuid и
+// выставляет/снимает флаг бустера. Без секрета — тихо пропускаем (фича выключена).
+async function postBoosters(discordUids) {
+  if (!config.botSyncSecret) return null;
+  const url = config.apiBase + "/integrations/discord/boosters";
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "User-Agent": UA,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Bot-Secret": config.botSyncSecret,
+      },
+      body: JSON.stringify({ boosters: discordUids }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`POST /integrations/discord/boosters → HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 module.exports = {
   apiGet,
   getVersion,
@@ -54,4 +81,5 @@ module.exports = {
   getMatches,
   getPlayer,
   getCurrentSeason,
+  postBoosters,
 };

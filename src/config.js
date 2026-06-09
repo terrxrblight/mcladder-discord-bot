@@ -44,6 +44,12 @@ const config = {
   roleAutocreate: truthy(process.env.ROLE_AUTOCREATE, true),
   verifiedRoleName: process.env.VERIFIED_ROLE_NAME || "Verified",
 
+  // Авто-бейдж Discord-бустера: бот шлёт на сайт список бустящих сейчас, сайт
+  // выставляет/снимает players.discord_booster. Требует Server Members Intent
+  // (как и роли) и общий секрет BOT_SYNC_SECRET (== тот же в .env API).
+  boosterSync: truthy(process.env.BOOSTER_SYNC, false),
+  botSyncSecret: process.env.BOT_SYNC_SECRET || "",
+
   // Публичные настройки (есть дефолты)
   apiBase: (process.env.API_BASE || "https://mcladder.com/api").replace(/\/+$/, ""),
   siteBase: (process.env.SITE_BASE || "https://mcladder.com").replace(/\/+$/, ""),
