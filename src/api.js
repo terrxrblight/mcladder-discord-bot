@@ -25,6 +25,10 @@ async function apiGet(pathname) {
 // /version — дешёвый «отпечаток» свежести данных: { v, serverTime }.
 const getVersion = () => apiGet("/version");
 
+// /meta/ranks — канонические определения лестницы рангов (пороги ELO, цвета,
+// дивизионы). Единый источник правды; применяется через ranks.syncFromApi.
+const getRanksMeta = () => apiGet("/meta/ranks");
+
 // /stats — { totalPlayers, matchesPlayed }.
 const getStats = () => apiGet("/stats");
 
@@ -76,6 +80,7 @@ async function postBoosters(discordUids) {
 module.exports = {
   apiGet,
   getVersion,
+  getRanksMeta,
   getStats,
   getLeaderboard,
   getMatches,

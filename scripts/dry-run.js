@@ -3,6 +3,7 @@
 // текстовый тир, это нормально.
 //   npm run dry-run
 const api = require("../src/api");
+const ranks = require("../src/ranks");
 const {
   buildLeaderboardEmbed,
   buildStatsEmbed,
@@ -10,6 +11,11 @@ const {
 } = require("../src/render");
 
 async function main() {
+  // Лестница рангов с живого API; если эндпоинт недоступен — встроенный фолбэк.
+  await ranks
+    .syncFromApi(api)
+    .catch((e) => console.warn("[ranks] sync failed, using built-in fallback:", e.message || e));
+
   const [rows, season, stats] = await Promise.all([
     api.getLeaderboard(10),
     api.getCurrentSeason().catch(() => null),

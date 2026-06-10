@@ -7,6 +7,8 @@ const {
   MessageFlags,
 } = require("discord.js");
 const { config, assertBotConfig } = require("./config");
+const api = require("./api");
+const ranks = require("./ranks");
 const { loadGuildEmojis } = require("./emojis");
 const { LeaderboardUpdater } = require("./leaderboard");
 const { MatchFeed } = require("./matches");
@@ -38,9 +40,20 @@ async function startSafely(label, fn) {
   }
 }
 
+// Лестница рангов с сайта (/api/meta/ranks): синк ДО стартеров (роли/лидерборд
+// создаются уже по свежей лестнице) + раз в час. При недоступности API бот
+// работает на встроенном фолбэке из ranks.js.
+let ranksTimer = null;
+
 client.once(Events.ClientReady, async (c) => {
   console.log(`✅ Logged in as ${c.user.tag}`);
   await loadGuildEmojis(client, config.guildId);
+
+  await startSafely("ranks", () => ranks.syncFromApi(api));
+  ranksTimer = setInterval(
+    () => ranks.syncFromApi(api).catch((e) => console.error("[ranks]", e.message || e)),
+    60 * 60 * 1000
+  );
 
   await startSafely("status", () => status.start());
   await startSafely("leaderboard", async () => {
@@ -73,6 +86,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // Аккуратное завершение под PM2.
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
+    if (ranksTimer) clearInterval(ranksTimer);
     leaderboard.stop();
     matchFeed.stop();
     status.stop();
